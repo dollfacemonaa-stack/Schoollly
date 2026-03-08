@@ -1,0 +1,366 @@
+import { useState, useEffect, createContext, useContext } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://your-project.supabase.co";
+const SUPABASE_ANON_KEY = "your-anon-key-here";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ─── TRACKS DATA (with real free lessons – CompTIA Core only for now) ────────
+const TRACKS = [
+  {
+    id: "comptia-core",
+    title: "CompTIA Core Track",
+    tag: "Most Popular",
+    description: "The industry's most recognized entry-to-professional IT certification pathway.",
+    timeline: "10–14 months",
+    level: "Entry → Professional",
+    modules: [
+      {
+        title: "CompTIA Tech+", lessons: 12, locked: false, done: false,
+        resources: ,
+        lessons: [
+          { id: "t1-l1", title: "Computer Basics", type: "video", source: "https://www.youtube.com/embed/0Y4W8nP5z1Q", duration: "30min", free_source: "Khan Academy" },
+          { id: "t1-l2", title: "Hardware Intro", type: "reading", source: "https://www.professormesser.com/free-a-plus-training/220-1101/220-1101-video/220-1101-hardware-basics/", duration: "45min", free_source: "Professor Messer" },
+          { id: "t1-l3", title: "Basic Troubleshooting", type: "quiz", source: "https://quizlet.com/search?query=comptia+techplus&type=sets", duration: "15min", free_source: "Quizlet" }
+        ]
+      },
+      {
+        title: "CompTIA A+", lessons: 18, locked: true, done: false,
+        resources: ["Professor Messer A+ Videos", "Cisco IT Essentials" { id: "a1-l1", title: "Motherboards & CPUs", type: "video", source: "https://www.youtube.com/embed/...messer-a-plus", duration: "40min", free_source: "Professor Messer" },
+          { id: "a1-l2", title: "Practice Quiz", type: "quiz", source: "https://quizlet.com/...a-plus", duration: "20min", free_source: "Quizlet" }
+        ]
+      },
+      {
+        title: "CompTIA Network+", lessons: 16, locked: true, done: false,
+        resources: ["Cisco Networking Academy", "Wireshark Labs" { id: "n1-l1", title: "TCP/IP Basics", type: "reading", source: "https://www.ciscopress.com/articles/article.asp?p=25259", duration: "30min", free_source: "Cisco" }
+        ]
+      },
+      {
+        title: "CompTIA Security+", lessons: 20, locked: true, done: false,
+        resources: ["OWASP", "TryHackMe Rooms" { id: "s1-l1", title: "Threat Landscape", type: "video", source: "https://www.youtube.com/embed/...tryhackme-intro", duration: "35min", free_source: "TryHackMe" }
+        ]
+      }
+    ]
+  },
+  // Add other tracks later...
+];
+
+// ─── AUTH & PROGRESS HOOKS (unchanged except for lesson support) ──────────────
+const AuthContext = createContext(null);
+
+function AuthProvider({ children }) {
+  const = useState(null);
+  const = useState(null);
+  const = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchUserAccess(session.user.id);
+      else setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchUserAccess(session.user.id);
+      else { setUserAccess(null); setLoading(false); }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchUserAccess = async (userId) => {
+    const { data } = await supabase.from("user_access").select("*").eq("user_id", userId).single();
+    setUserAccess(data);
+    setLoading(false);
+  };
+
+  const signUp = async (email, password) => {
+    const { error } = await supabase.auth.signUp({ email, password });
+    return { error };
+  };
+
+  const signIn = async (email, password) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error };
+  };
+
+  const signOut = async () => { await supabase.auth.signOut(); };
+
+  const hasActiveAccess = (trackId) => {
+    if (!userAccess) return false;
+    if (userAccess.track_id !== trackId) return false;
+    if (userAccess.access_status !== "active") return false;
+    if (userAccess.access_expires_at && new Date(userAccess.access_expires_at) < new Date()) return false;
+    return true;
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, userAccess, loading, signUp, signIn, signOut, hasActiveAccess, fetchUserAccess }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+const useAuth = () => useContext(AuthContext);
+
+function useProgress(trackId) {
+  const { user } = useAuth();
+  const = useState(Object.fromEntries(TRACKS.map(t => )));
+  const = useState(false);
+
+  useEffect(() => {
+    if (!user || !trackId) return;
+    loadProgress(trackId);
+  }, );
+
+  const loadProgress = async (tid) => {
+    const { data: dbModules } = await supabase.from("modules").select("id, title, sequence_order, lessons").eq("track_id", tid).order("sequence_order");
+    if (!dbModules) return;
+    const { data: progress } = await supabase.from("user_progress").select("module_id").eq("user_id", user.id);
+    const completedIds = new Set(progress?.map(p => p.module_id) ?? []);
+    setModuleStates(prev => {
+      const updated = prev .map((m, i) => {
+        const dbMod = dbModules ;
+        const done = dbMod ? completedIds.has(dbMod.id) : false;
+        const prevDone = i === 0 || (dbModules && completedIds.has(dbModules .id));
+        return { ...m, done, locked: i === 0 ? false : !prevDone };
+      });
+      return { ...prev, : updated };
+    });
+  };
+
+  const toggleDone = async (tid, idx) => {
+    let wasComplete = false;
+    setModuleStates(prev => {
+      const updated = prev .map(m => ({ ...m }));
+      if (updated .locked) return prev;
+      wasComplete = updated .done;
+      updated .done = !updated .done;
+      if (updated .done && updated ) updated .locked = false;
+      if (!updated .done && updated[idx + 1]) updated .locked = true;
+      return { ...prev, : updated };
+    });
+    if (!user) return;
+    setSyncing(true);
+    const { data: dbMod } = await supabase.from("modules").select("id").eq("track_id", tid).eq("sequence_order", idx + 1).single();
+    if (dbMod) {
+      if (!wasComplete) {
+        await supabase.from("user_progress").upsert({ user_id: user.id, module_id: dbMod.id });
+      } else {
+        await supabase.from("user_progress").delete().eq("user_id", user.id).eq("module_id", dbMod.id);
+      }
+    }
+    setSyncing(false);
+  };
+
+  const getProgress = (tid) => {
+    const mods = moduleStates ;
+    return Math.round((mods.filter(m => m.done).length / mods.length) * 100);
+  };
+
+  return { moduleStates, toggleDone, getProgress, syncing };
+}
+
+// ─── NEW: LESSON VIEWER + LAB SIMULATOR ──────────────────────────────────────
+function LabSimulator({ title, checklist, onComplete }) {
+  const = useState(checklist.map(t => ({ ...t, done: false })));
+  const = useState(0);
+  const = useState(false);
+
+  useEffect(() => {
+    let interval;
+    if (running) interval = setInterval(() => setTimer(t => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, );
+
+  const toggleTask = (i) => {
+    const updated = ;
+    updated .done = !updated .done;
+    setTasks(updated);
+    if (updated.every(t => t.done)) onComplete();
+  };
+
+  return (
+    <div className="panel">
+      <div className="lbl lbl-amber" style={{ marginBottom: 12 }}>{title}</div>
+      <div style={{ fontSize: 14, marginBottom: 16 }}>
+        Time: {Math.floor(timer / 60)}:{timer % 60 < 10 ? "0" : ""}{timer % 60}
+        <button onClick={() => setRunning(!running)} className="btn btn-xs btn-ghost" style={{ marginLeft: 12 }}>
+          {running ? "Pause" : "Start"}
+        </button>
+      </div>
+      {tasks.map((t, i) => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+          <input type="checkbox" checked={t.done} onChange={() => toggleTask(i)} />
+          <span style={{ color: t.done ? "var(--green)" : "var(--muted)" }}>{t.task}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LessonViewer({ moduleIdx, lessonIdx, onBack }) {
+  const { user } = useAuth();
+  const { moduleStates } = useProgress(TRACKS[0].id); // CompTIA Core for now
+  const module = moduleStates .id]?. ;
+  const lesson = module?.lessons?. ;
+
+  if (!lesson) return <div className="panel">No lesson selected</div>;
+
+  const markComplete = async () => {
+    const updatedLessons = ;
+    updatedLessons .completed = true;
+    await supabase.from("modules").update({ lessons: updatedLessons }).eq("title", module.title);
+    onBack();
+  };
+
+  return (
+    <div className="section fade-in">
+      <div className="topbar">
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>← Back</button>
+        <h2>{module.title} → {lesson.title}</h2>
+      </div>
+      <div className="panel">
+        {lesson.type === "video" && <iframe width="100%" height="480" src={lesson.source} frameBorder="0" allowFullScreen />}
+        {lesson.type === "reading" && (
+          <a href={lesson.source} target="_blank" className="btn btn-primary btn-lg" style={{ display: "block", textAlign: "center" }}>
+            Open {lesson.free_source} Resource
+          </a>
+        )}
+        {lesson.type === "quiz" && (
+          <a href={lesson.source} target="_blank" className="btn btn-amber btn-lg" style={{ display: "block", textAlign: "center" }}>
+            Take Quiz
+          </a>
+        )}
+        {lesson.type === "lab" && (
+          <LabSimulator 
+            title="Enterprise Lab: AD / Wireless"
+            checklist={[
+              { task: "Install Windows Server eval" },
+              { task: "Promote to Domain Controller" },
+              { task: "Join 2 client VMs" },
+              { task: "Apply GPO + Wireshark capture" }
+            ]}
+            onComplete={markComplete}
+          />
+        )}
+      </div>
+      {!lesson.completed && (
+        <button className="btn btn-green btn-lg" onClick={markComplete} style={{ width: "100%", marginTop: 20 }}>
+          Mark Complete →
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── RESOURCES TAB ────────────────────────────────────────────────────────────
+function ResourcesTab({ module }) {
+  return (
+    <div className="panel">
+      <div className="lbl lbl-green" style={{ marginBottom: 12 }}>Free Resources</div>
+      <ul style={{ listStyle: "none", gap: 8, display: "flex", flexDirection: "column" }}>
+        {module.resources.map((r, i) => (
+          <li key={i} style={{ fontSize: 14, color: "var(--muted)" }}>
+            • {r}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ─── DASHBOARD UPDATE (with Resources tab + lesson links) ─────────────────────
+function DashboardPage({ track, modules, toggleDone, progress, go, handleEnroll }) {
+  const { hasActiveAccess } = useAuth();
+  const hasAccess = hasActiveAccess(track.id);
+  const = useState("checklist");
+  const = useState(null);
+
+  if (!hasAccess) {
+    return (
+      <div style={{ padding: "80px 48px", textAlign: "center" }}>
+        <h1>🔒 Access Required</h1>
+        <button className="btn btn-amber btn-lg" onClick={() => handleEnroll(track)}>Enroll Now</button>
+      </div>
+    );
+  }
+
+  if (selectedLesson) {
+    return <LessonViewer 
+      moduleIdx={selectedLesson.moduleIdx} 
+      lessonIdx={selectedLesson.lessonIdx} 
+      onBack={() => setSelectedLesson(null)} 
+    />;
+  }
+
+  return (
+    <div>
+      <div className="topbar">
+        <h1>{track.title}</h1>
+      </div>
+
+      <div className="stats-row">
+        <div className="card"><div className="stat-value green">{progress}%</div><div className="stat-sub">Progress</div></div>
+      </div>
+
+      <div className="content-grid">
+        <div>
+          <div className="panel">
+            <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+              <button className={`btn ${activeTab === "checklist" ? "btn-amber" : "btn-ghost"}`} onClick={() => setActiveTab("checklist")}>Checklist</button>
+              <button className={`btn ${activeTab === "resources" ? "btn-amber" : "btn-ghost"}`} onClick={() => setActiveTab("resources")}>Resources</button>
+            </div>
+
+            {activeTab === "checklist" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {modules.map((m, i) => (
+                  <div key={i} className={`module-row ${m.locked ? "locked-row" : ""}`}>
+                    <div>{m.done ? "✓" : m.locked ? "🔒" : "▶"}</div>
+                    <div style={{ flex: 1 }}>
+                      <span>{m.title}</span>
+                      {m.lessons?.length > 0 && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+                          {m.lessons.map((l, li) => (
+                            <button 
+                              key={li} 
+                              className="btn btn-xs btn-outline" 
+                              style={{ marginRight: 6 }}
+                              onClick={() => setSelectedLesson({ moduleIdx: i, lessonIdx: li })}
+                            >
+                              Lesson {li + 1}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {!m.locked && <button onClick={() => toggleDone(i)}>Mark Complete</button>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeTab === "resources" && <ResourcesTab module={modules.find(m => !m.done && !m.locked) || modules[0]} />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ROOT (unchanged except new imports/components) ──────────────────────
+export default function App() {
+  return (
+    <AuthProvider>
+      <style>{/* your full CSS here – paste it if you want, or keep separate */}</style>
+      <Main />
+    </AuthProvider>
+  );
+}
+
+function Main() {
+  const { user, userAccess, loading, signOut } = useAuth();
+  const = useState("home");
+  const = useState(TRACKS[0]);
+  const = useState(false);
+  const { moduleStates, toggleDone, getProgress
